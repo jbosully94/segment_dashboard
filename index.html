@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paint and segment</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/pyodide/v0.29.5/full/pyodide.js"></script>
+<style>
+  :root {
+    --bg: #E9EDF0;
+    --panel: #FFFFFF;
+    --ink: #16212B;
+    --muted: #5B6875;
+    --line: #CDD5DC;
+    --accent: #1D5A85;
+    --stage: #1E2830;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 16px;
+    line-height: 1.45;
+    color: var(--ink);
+    background: var(--bg);
+    display: grid;
+    grid-template-columns: 320px 1fr;
+  }
+  aside {
+    background: var(--panel);
+    border-right: 1px solid var(--line);
+    padding: 24px 22px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+  h1 { font-size: 1.6rem; line-height: 1.15; margin: 0 0 6px; }
+  .intro { color: var(--muted); margin: 0; font-size: 0.95rem; }
+  .step h2 {
+    font-size: 1rem;
+    margin: 0 0 10px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .step h2 span {
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    background: var(--ink);
+    color: var(--panel);
+    display: grid; place-items: center;
+    font-size: 0.8rem;
+    flex: none;
+  }
+  button, .file-btn {
+    font: inherit;
+    font-size: 0.95rem;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--ink);
+    border-radius: 6px;
+    padding: 7px 12px;
+    cursor: pointer;
+  }
+  button:hover, .file-btn:hover { border-color: var(--muted); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.primary, .file-btn {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 700;
+    width: 100%;
+    padding: 10px 12px;
+  }
+  .file-btn { display: block; text-align: center; }
+  #file { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  #file:focus-visible + .file-btn, button:focus-visible, input:focus-visible {
+    outline: 3px solid #F0B429;
+    outline-offset: 2px;
+  }
+  .classes { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+  .class-row {
+    display: flex; align-items: center; gap: 8px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 5px 8px;
+  }
+  .class-row.active { border-color: var(--ink); box-shadow: inset 3px 0 0 var(--ink); }
+  .class-row input[type=radio] { margin: 0; }
+  .swatch { width: 18px; height: 18px; border-radius: 4px; flex: none; }
+  .class-row input[type=text] {
+    font: inherit; font-size: 0.95rem;
+    border: none; background: transparent; color: var(--ink);
+    width: 100%; padding: 2px 0;
+  }
+  .eraser .swatch {
+    background: repeating-conic-gradient(#ccc 0 25%, #fff 0 50%) 0 0 / 8px 8px;
+    border: 1px solid var(--line);
+  }
+  .row { display: flex; gap: 8px; }
+  .row button { flex: 1; }
+  label.field { display: block; font-size: 0.9rem; color: var(--muted); margin-top: 12px; }
+  label.field input[type=range] { width: 100%; }
+  label.check { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; margin-top: 10px; }
+  #status {
+    position: absolute;
+    left: 20px; right: 20px; bottom: 14px;
+    font-size: 0.95rem;
+    color: #D5DDE4;
+    margin: 0;
+  }
+  main {
+    background: var(--stage);
+    display: grid;
+    place-items: center;
+    padding: 20px 20px 48px;
+    overflow: hidden;
+    min-height: 0;
+    position: relative;
+  }
+  #empty { color: #9AA7B3; font-size: 1.1rem; }
+  #stage { position: relative; display: none; }
+  #stage canvas {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    image-rendering: pixelated;
+  }
+  #stage canvas#imageCanvas { position: static; display: block; image-rendering: auto; }
+  #drawCanvas { touch-action: none; cursor: none; }
+  #brush {
+    position: fixed;
+    pointer-events: none;
+    border: 1.5px solid #fff;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.6);
+    border-radius: 50%;
+    display: none;
+    transform: translate(-50%, -50%);
+  }
+  @media (max-width: 760px) {
+    body { grid-template-columns: 1fr; grid-template-rows: auto 70vh; }
+    aside { border-right: none; border-bottom: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<aside>
+  <div>
+    <h1>Paint and segment</h1>
+    <p class="intro">Paint a few strokes for each class, then train a pixel classifier to label the whole image. Everything runs in your browser.</p>
+  </div>
+
+  <section class="step">
+    <h2><span>1</span>Load an image</h2>
+    <input type="file" id="file" accept="image/*">
+    <label for="file" class="file-btn">Choose image</label>
+  </section>
+
+  <section class="step">
+    <h2><span>2</span>Paint examples</h2>
+    <div class="classes" id="classes"></div>
+    <div class="row">
+      <button id="addClass">Add class</button>
+      <button id="clearStrokes">Clear strokes</button>
+    </div>
+    <label class="field">Brush size
+      <input type="range" id="brushSize" min="1" max="40" value="6">
+    </label>
+  </section>
+
+  <section class="step">
+    <h2><span>3</span>Train and segment</h2>
+    <button class="primary" id="train" disabled>Train and segment</button>
+    <label class="field">Segmentation opacity
+      <input type="range" id="opacity" min="0" max="100" value="50">
+    </label>
+    <label class="check"><input type="checkbox" id="showStrokes" checked> Show strokes</label>
+  </section>
+</aside>
+
+<main id="main">
+  <div id="empty">Choose an image to start</div>
+  <p id="status" role="status">Loading Python. The first visit takes about 30 seconds.</p>
+  <div id="stage">
+    <canvas id="imageCanvas"></canvas>
+    <canvas id="predCanvas"></canvas>
+    <canvas id="annCanvas"></canvas>
+    <canvas id="drawCanvas"></canvas>
+  </div>
+</main>
+<div id="brush"></div>
+
+<script>
+const MAX_SIZE = 1024;
+const COLORS = ["#56B4E9", "#E69F00", "#009E73", "#CC79A7", "#F0E442", "#D55E00"];
+
+const PYTHON = `
+import numpy as np
+from skimage.feature import multiscale_basic_features
+from sklearn.ensemble import RandomForestClassifier
+
+features = None
+
+def compute_features(buf, w, h):
+    global features
+    img = np.asarray(buf.to_py()).reshape(h, w, 4)[:, :, :3]
+    features = multiscale_basic_features(img, channel_axis=-1)
+
+def train_and_predict(buf):
+    labels = np.asarray(buf.to_py())
+    X = features.reshape(-1, features.shape[-1])
+    idx = np.flatnonzero(labels)
+    if idx.size > 100_000:
+        idx = np.random.choice(idx, 100_000, replace=False)
+    clf = RandomForestClassifier(n_estimators=50, max_depth=10, max_samples=0.5)
+    clf.fit(X[idx], labels[idx])
+    return clf.predict(X).astype(np.uint8)
+`;
+
+const $ = (id) => document.getElementById(id);
+const statusEl = $("status");
+const setStatus = (t) => { statusEl.textContent = t; };
+const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+
+let py = null, computeFeatures = null, trainAndPredict = null;
+let W = 0, H = 0, labels = null, annImg = null, rgba = null;
+let featuresReady = false, busy = false;
+let classes = [{ name: "Background" }, { name: "Foreground" }];
+let activeClass = 1;
+
+const imageCtx = $("imageCanvas").getContext("2d");
+const predCtx = $("predCanvas").getContext("2d");
+const annCtx = $("annCanvas").getContext("2d");
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+// ---------- Python ----------
+(async () => {
+  try {
+    py = await loadPyodide();
+    setStatus("Loading scikit-image and scikit-learn.");
+    await py.loadPackage(["numpy", "scikit-image", "scikit-learn"]);
+    await py.runPythonAsync(PYTHON);
+    computeFeatures = py.globals.get("compute_features");
+    trainAndPredict = py.globals.get("train_and_predict");
+    setStatus(W ? "Ready. Paint at least two classes, then train." : "Ready. Choose an image to start.");
+    updateTrainButton();
+  } catch (err) {
+    setStatus("Python failed to load. Check your internet connection and reload the page. " + err);
+  }
+})();
+
+// ---------- Classes ----------
+function renderClasses() {
+  const box = $("classes");
+  box.innerHTML = "";
+  const rows = classes.map((c, i) => ({ id: i + 1, name: c.name, color: COLORS[i] }));
+  rows.push({ id: 0, name: "Eraser", color: null });
+  for (const r of rows) {
+    const row = document.createElement("div");
+    row.className = "class-row" + (r.id === 0 ? " eraser" : "") + (r.id === activeClass ? " active" : "");
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = "cls";
+    radio.checked = r.id === activeClass;
+    radio.setAttribute("aria-label", r.name);
+    radio.addEventListener("change", () => { activeClass = r.id; renderClasses(); });
+    const sw = document.createElement("span");
+    sw.className = "swatch";
+    if (r.color) sw.style.background = r.color;
+    row.append(radio, sw);
+    if (r.id === 0) {
+      const t = document.createElement("span");
+      t.textContent = "Eraser";
+      row.append(t);
+    } else {
+      const name = document.createElement("input");
+      name.type = "text";
+      name.value = r.name;
+      name.addEventListener("input", () => { classes[r.id - 1].name = name.value; });
+      name.addEventListener("focus", () => { if (activeClass !== r.id) { activeClass = r.id; renderClasses(); } });
+      row.append(name);
+    }
+    row.addEventListener("click", (e) => {
+      if (e.target.tagName !== "INPUT" && activeClass !== r.id) { activeClass = r.id; renderClasses(); }
+    });
+    box.append(row);
+  }
+  $("addClass").disabled = classes.length >= COLORS.length;
+}
+
+$("addClass").addEventListener("click", () => {
+  classes.push({ name: "Class " + (classes.length + 1) });
+  activeClass = classes.length;
+  renderClasses();
+});
+
+$("clearStrokes").addEventListener("click", () => {
+  if (!labels) return;
+  labels.fill(0);
+  annImg.data.fill(0);
+  annCtx.putImageData(annImg, 0, 0);
+  updateTrainButton();
+});
+
+// ---------- Image loading ----------
+$("file").addEventListener("change", (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const img = new Image();
+  img.onload = () => {
+    const scale = Math.min(1, MAX_SIZE / Math.max(img.width, img.height));
+    W = Math.round(img.width * scale);
+    H = Math.round(img.height * scale);
+    for (const id of ["imageCanvas", "predCanvas", "annCanvas", "drawCanvas"]) {
+      $(id).width = W;
+      $(id).height = H;
+    }
+    imageCtx.drawImage(img, 0, 0, W, H);
+    rgba = new Uint8Array(imageCtx.getImageData(0, 0, W, H).data.buffer);
+    labels = new Uint8Array(W * H);
+    annImg = annCtx.createImageData(W, H);
+    predCtx.clearRect(0, 0, W, H);
+    featuresReady = false;
+    $("empty").style.display = "none";
+    $("stage").style.display = "block";
+    fitStage();
+    URL.revokeObjectURL(img.src);
+    const resized = scale < 1 ? ` Resized to ${W} × ${H} pixels.` : "";
+    setStatus((py ? "Paint at least two classes, then train." : "Python is still loading. You can start painting.") + resized);
+    updateTrainButton();
+  };
+  img.onerror = () => setStatus("That file could not be read as an image. Try a PNG or JPEG.");
+  img.src = URL.createObjectURL(f);
+});
+
+function fitStage() {
+  if (!W) return;
+  const main = $("main");
+  const availW = main.clientWidth - 40;
+  const availH = main.clientHeight - 68;
+  const s = Math.min(availW / W, availH / H);
+  $("stage").style.width = Math.floor(W * s) + "px";
+  $("stage").style.height = Math.floor(H * s) + "px";
+}
+window.addEventListener("resize", fitStage);
+
+// ---------- Painting ----------
+const drawCanvas = $("drawCanvas");
+const brushEl = $("brush");
+let painting = false, last = null;
+
+function toImage(e) {
+  const r = drawCanvas.getBoundingClientRect();
+  return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height];
+}
+
+function stamp(cx, cy) {
+  const rad = Number($("brushSize").value);
+  const x0 = Math.max(0, Math.floor(cx - rad)), x1 = Math.min(W - 1, Math.ceil(cx + rad));
+  const y0 = Math.max(0, Math.floor(cy - rad)), y1 = Math.min(H - 1, Math.ceil(cy + rad));
+  if (x0 > x1 || y0 > y1) return;
+  const [r, g, b] = activeClass ? hexToRgb(COLORS[activeClass - 1]) : [0, 0, 0];
+  const d = annImg.data;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      if ((x - cx) ** 2 + (y - cy) ** 2 > rad * rad) continue;
+      const i = y * W + x, j = i * 4;
+      labels[i] = activeClass;
+      d[j] = r; d[j + 1] = g; d[j + 2] = b; d[j + 3] = activeClass ? 255 : 0;
+    }
+  }
+  annCtx.putImageData(annImg, 0, 0, x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+}
+
+function paintTo(p) {
+  if (last) {
+    const dist = Math.hypot(p[0] - last[0], p[1] - last[1]);
+    const step = Math.max(1, Number($("brushSize").value) / 3);
+    const n = Math.ceil(dist / step);
+    for (let k = 1; k <= n; k++) {
+      stamp(last[0] + (p[0] - last[0]) * k / n, last[1] + (p[1] - last[1]) * k / n);
+    }
+  } else {
+    stamp(p[0], p[1]);
+  }
+  last = p;
+}
+
+function moveBrush(e) {
+  const r = drawCanvas.getBoundingClientRect();
+  const size = 2 * Number($("brushSize").value) * r.width / W;
+  brushEl.style.width = brushEl.style.height = Math.max(4, size) + "px";
+  brushEl.style.left = e.clientX + "px";
+  brushEl.style.top = e.clientY + "px";
+}
+
+drawCanvas.addEventListener("pointerdown", (e) => {
+  if (busy) return;
+  painting = true;
+  drawCanvas.setPointerCapture(e.pointerId);
+  $("showStrokes").checked = true;
+  $("annCanvas").style.display = "block";
+  last = null;
+  paintTo(toImage(e));
+});
+drawCanvas.addEventListener("pointermove", (e) => {
+  moveBrush(e);
+  if (painting) paintTo(toImage(e));
+});
+const stopPainting = () => {
+  if (painting) updateTrainButton();
+  painting = false;
+  last = null;
+};
+drawCanvas.addEventListener("pointerup", stopPainting);
+drawCanvas.addEventListener("pointercancel", stopPainting);
+drawCanvas.addEventListener("pointerenter", () => { brushEl.style.display = "block"; });
+drawCanvas.addEventListener("pointerleave", () => { brushEl.style.display = "none"; });
+
+// ---------- Training ----------
+function paintedClassCount() {
+  if (!labels) return 0;
+  const seen = new Set();
+  for (let i = 0; i < labels.length; i++) if (labels[i]) seen.add(labels[i]);
+  return seen.size;
+}
+
+function updateTrainButton() {
+  $("train").disabled = busy || !trainAndPredict || !labels;
+}
+
+$("train").addEventListener("click", async () => {
+  if (paintedClassCount() < 2) {
+    setStatus("Paint strokes for at least two classes before training.");
+    return;
+  }
+  busy = true;
+  updateTrainButton();
+  try {
+    const t0 = performance.now();
+    if (!featuresReady) {
+      setStatus("Computing image features. This happens once per image.");
+      await nextFrame();
+      computeFeatures(rgba, W, H);
+      featuresReady = true;
+    }
+    setStatus("Training and segmenting.");
+    await nextFrame();
+    const result = trainAndPredict(labels);
+    const buf = result.getBuffer("u8");
+    const pred = buf.data;
+    const out = predCtx.createImageData(W, H);
+    const lut = COLORS.map(hexToRgb);
+    for (let i = 0; i < pred.length; i++) {
+      const c = lut[pred[i] - 1], j = i * 4;
+      out.data[j] = c[0]; out.data[j + 1] = c[1]; out.data[j + 2] = c[2]; out.data[j + 3] = 255;
+    }
+    buf.release();
+    result.destroy();
+    predCtx.putImageData(out, 0, 0);
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    setStatus(`Done in ${secs} s. Add or erase strokes where it is wrong, then train again.`);
+  } catch (err) {
+    setStatus("Training failed: " + err);
+  }
+  busy = false;
+  updateTrainButton();
+});
+
+// ---------- Display controls ----------
+$("opacity").addEventListener("input", (e) => { $("predCanvas").style.opacity = e.target.value / 100; });
+$("showStrokes").addEventListener("change", (e) => { $("annCanvas").style.display = e.target.checked ? "block" : "none"; });
+$("predCanvas").style.opacity = 0.5;
+
+renderClasses();
+</script>
+</body>
+</html>
