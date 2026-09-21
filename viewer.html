@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Volume viewer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/geotiff@3.0.5/dist-browser/geotiff.js"></script>
+<style>
+  :root {
+    --bg: #E9EDF0;
+    --panel: #FFFFFF;
+    --ink: #16212B;
+    --muted: #5B6875;
+    --line: #CDD5DC;
+    --accent: #1D5A85;
+    --stage: #000000;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 16px;
+    line-height: 1.45;
+    color: var(--ink);
+    background: var(--bg);
+    display: grid;
+    grid-template-columns: 320px 1fr;
+  }
+  aside {
+    background: var(--panel);
+    border-right: 1px solid var(--line);
+    padding: 24px 22px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+  h1 { font-size: 1.6rem; line-height: 1.15; margin: 0 0 6px; }
+  h2 { font-size: 1rem; margin: 0 0 10px; }
+  .intro { color: var(--muted); margin: 0; font-size: 0.95rem; }
+  button, .file-btn, select {
+    font: inherit;
+    font-size: 0.95rem;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--ink);
+    border-radius: 6px;
+    padding: 7px 12px;
+    cursor: pointer;
+  }
+  select { width: 100%; padding: 6px 8px; margin-top: 4px; }
+  button:hover, .file-btn:hover { border-color: var(--muted); }
+  .file-btn {
+    display: block;
+    text-align: center;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 700;
+    padding: 10px 12px;
+  }
+  #file { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  #file:focus-visible + .file-btn, button:focus-visible, input:focus-visible, select:focus-visible {
+    outline: 3px solid #F0B429;
+    outline-offset: 2px;
+  }
+  #layers { display: flex; flex-direction: column; gap: 6px; }
+  .empty { color: var(--muted); font-size: 0.9rem; margin: 0; }
+  .layer-row {
+    display: flex; align-items: center; gap: 8px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 5px 6px 5px 8px;
+    cursor: pointer;
+  }
+  .layer-row.selected { border-color: var(--ink); box-shadow: inset 3px 0 0 var(--ink); }
+  .layer-row input { margin: 0; }
+  .swatch { width: 26px; height: 14px; border-radius: 3px; flex: none; border: 1px solid var(--line); }
+  .layer-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.95rem; }
+  .layer-row button { padding: 0 8px; line-height: 1.6; border-color: transparent; color: var(--muted); }
+  .layer-row button:hover { border-color: var(--line); color: var(--ink); }
+  .field { display: block; font-size: 0.9rem; color: var(--muted); margin-top: 12px; }
+  .field input[type=range] { width: 100%; display: block; }
+  .clim-values { display: flex; justify-content: space-between; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .toggle { display: flex; }
+  .toggle button { flex: 1; border-radius: 0; }
+  .toggle button:first-child { border-radius: 6px 0 0 6px; }
+  .toggle button:last-child { border-radius: 0 6px 6px 0; border-left: none; }
+  .toggle button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: #fff; font-weight: 700; }
+  #resetView { width: 100%; margin-top: 14px; }
+  main { position: relative; background: var(--stage); min-height: 0; overflow: hidden; }
+  #gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+  #gl:active { cursor: grabbing; }
+  #hint {
+    position: absolute; inset: 0;
+    display: grid; place-items: center;
+    color: #9AA7B3; font-size: 1.1rem;
+    pointer-events: none;
+  }
+  #status {
+    position: absolute;
+    left: 20px; right: 20px; bottom: 14px;
+    margin: 0;
+    color: #D5DDE4;
+    font-size: 0.95rem;
+    text-shadow: 0 1px 2px #000;
+    pointer-events: none;
+  }
+  [hidden] { display: none !important; }
+  @media (max-width: 760px) {
+    body { grid-template-columns: 1fr; grid-template-rows: auto 70vh; }
+    aside { border-right: none; border-bottom: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<aside>
+  <div>
+    <h1>Volume viewer</h1>
+    <p class="intro">Open one or more 3D TIFF stacks. Each file becomes a layer you can recolour, fade and view in 2D or 3D.</p>
+  </div>
+
+  <section>
+    <input type="file" id="file" accept=".tif,.tiff" multiple>
+    <label for="file" class="file-btn">Open TIFF</label>
+  </section>
+
+  <section>
+    <h2>Layers</h2>
+    <div id="layers"></div>
+  </section>
+
+  <section id="layerControls" hidden>
+    <h2>Layer settings</h2>
+    <label class="field">Colormap <select id="cmap"></select></label>
+    <div class="field">Contrast limits
+      <input type="range" id="climLo" aria-label="Lower contrast limit">
+      <input type="range" id="climHi" aria-label="Upper contrast limit">
+      <div class="clim-values"><span id="loVal"></span><span id="hiVal"></span></div>
+    </div>
+    <label class="field">Opacity <input type="range" id="opacity" min="0" max="100"></label>
+    <label class="field">Blending
+      <select id="blending">
+        <option value="translucent">Translucent</option>
+        <option value="additive">Additive</option>
+      </select>
+    </label>
+    <label class="field">3D rendering
+      <select id="rendering">
+        <option value="mip">Maximum intensity</option>
+        <option value="translucent">Translucent</option>
+      </select>
+    </label>
+  </section>
+
+  <section>
+    <h2>View</h2>
+    <div class="toggle" role="group" aria-label="View mode">
+      <button id="mode2d" aria-pressed="true">2D</button>
+      <button id="mode3d" aria-pressed="false">3D</button>
+    </div>
+    <div id="sliceControls">
+      <label class="field">Slice along
+        <select id="axis">
+          <option value="0">Z</option>
+          <option value="1">Y</option>
+          <option value="2">X</option>
+        </select>
+      </label>
+      <label class="field"><span id="sliceLabel">Slice</span>
+        <input type="range" id="slice" min="0" max="0" value="0">
+      </label>
+    </div>
+    <button id="resetView">Reset view</button>
+  </section>
+</aside>
+
+<main id="main">
+  <canvas id="gl"></canvas>
+  <div id="hint">Open a 3D TIFF to start</div>
+  <p id="status" role="status"></p>
+</main>
+
+<script>
+const MAX_DIM = 512;
+
+const COLORMAPS = {
+  Gray: ["#000000", "#ffffff"],
+  Red: ["#000000", "#ff0000"],
+  Green: ["#000000", "#00ff00"],
+  Blue: ["#000000", "#0000ff"],
+  Magenta: ["#000000", "#ff00ff"],
+  Cyan: ["#000000", "#00ffff"],
+  Yellow: ["#000000", "#ffff00"],
+  Viridis: ["#440154", "#3b528b", "#21918c", "#5ec962", "#fde725"],
+  Magma: ["#000004", "#3b0f70", "#8c2981", "#de4968", "#fe9f6d", "#fcfdbf"],
+};
+const CMAP_NAMES = Object.keys(COLORMAPS);
+const DEFAULT_CMAPS = ["Gray", "Magenta", "Green", "Cyan", "Yellow"];
+
+const $ = (id) => document.getElementById(id);
+const setStatus = (t) => { $("status").textContent = t; };
+
+// ---------- WebGL setup ----------
+const canvas = $("gl");
+const gl = canvas.getContext("webgl2", { antialias: false });
+
+const VS = `#version 300 es
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const COMMON = `#version 300 es
+precision highp float;
+precision highp sampler3D;
+uniform sampler3D uVol;
+uniform sampler2D uCmap;
+uniform float uRow;
+uniform vec2 uClim;
+uniform float uOpacity;
+uniform float uAdditive;
+uniform vec2 uCanvas;
+out vec4 outColor;
+float norm(float v) { return clamp((v - uClim.x) / max(uClim.y - uClim.x, 1e-6), 0.0, 1.0); }
+vec3 cmap(float v) { return texture(uCmap, vec2((v * 255.0 + 0.5) / 256.0, uRow)).rgb; }
+`;
+
+const FS_2D = COMMON + `
+uniform vec2 uPlane;
+uniform vec3 uView;
+uniform int uAxis;
+uniform float uSlice;
+void main() {
+  vec2 f = vec2(gl_FragCoord.x, uCanvas.y - gl_FragCoord.y);
+  vec2 p = (f - 0.5 * uCanvas) / uView.z + uView.xy;
+  if (p.x < 0.0 || p.y < 0.0 || p.x > uPlane.x || p.y > uPlane.y) discard;
+  vec2 q = p / uPlane;
+  vec3 t = uAxis == 0 ? vec3(q, uSlice) : uAxis == 1 ? vec3(q.x, uSlice, q.y) : vec3(uSlice, q.x, q.y);
+  vec3 c = cmap(norm(texture(uVol, t).r));
+  outColor = vec4(c * uOpacity, uAdditive > 0.5 ? 0.0 : uOpacity);
+}`;
+
+const FS_3D = COMMON + `
+uniform vec3 uEye;
+uniform vec3 uRight;
+uniform vec3 uUp;
+uniform vec3 uFwd;
+uniform float uTanHalf;
+uniform vec3 uBox;
+uniform float uStep;
+uniform int uMode;
+void main() {
+  vec2 ndc = gl_FragCoord.xy / uCanvas * 2.0 - 1.0;
+  vec3 rd = normalize(uFwd + ndc.x * uTanHalf * (uCanvas.x / uCanvas.y) * uRight + ndc.y * uTanHalf * uUp) + 1e-6;
+  vec3 ro = uEye / uBox + 0.5;
+  vec3 d = rd / uBox;
+  vec3 t0 = -ro / d;
+  vec3 t1 = (1.0 - ro) / d;
+  vec3 tmin = min(t0, t1);
+  vec3 tmax = max(t0, t1);
+  float tn = max(max(max(tmin.x, tmin.y), tmin.z), 0.0);
+  float tf = min(min(tmax.x, tmax.y), tmax.z);
+  if (tn >= tf) discard;
+  float mx = 0.0;
+  vec3 acc = vec3(0.0);
+  float A = 0.0;
+  for (int i = 0; i < 4096; i++) {
+    float t = tn + (float(i) + 0.5) * uStep;
+    if (t > tf) break;
+    float v = norm(texture(uVol, ro + d * t).r);
+    if (uMode == 0) {
+      mx = max(mx, v);
+    } else {
+      float a = 1.0 - pow(1.0 - 0.1 * v, 0.5);
+      acc += (1.0 - A) * a * cmap(v);
+      A += (1.0 - A) * a;
+      if (A > 0.98) break;
+    }
+  }
+  if (uMode == 0) {
+    outColor = vec4(cmap(mx) * uOpacity, uAdditive > 0.5 ? 0.0 : uOpacity);
+  } else {
+    outColor = vec4(acc * uOpacity, uAdditive > 0.5 ? 0.0 : A * uOpacity);
+  }
+}`;
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+
+function makeProgram(fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, VS));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {};
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) {
+    const name = gl.getActiveUniform(p, i).name;
+    u[name] = gl.getUniformLocation(p, name);
+  }
+  return { p, u: (name) => u[name] ?? null };
+}
+
+let prog2d, prog3d, cmapTex, nearest, linear;
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function initGL() {
+  prog2d = makeProgram(FS_2D);
+  prog3d = makeProgram(FS_3D);
+
+  const lut = new Uint8Array(256 * CMAP_NAMES.length * 4);
+  CMAP_NAMES.forEach((name, row) => {
+    const stops = COLORMAPS[name].map(hexToRgb);
+    for (let i = 0; i < 256; i++) {
+      const x = (i / 255) * (stops.length - 1);
+      const k = Math.min(Math.floor(x), stops.length - 2);
+      const f = x - k;
+      for (let c = 0; c < 3; c++) {
+        lut[(row * 256 + i) * 4 + c] = Math.round(stops[k][c] * (1 - f) + stops[k + 1][c] * f);
+      }
+      lut[(row * 256 + i) * 4 + 3] = 255;
+    }
+  });
+  cmapTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, cmapTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, CMAP_NAMES.length, 0, gl.RGBA, gl.UNSIGNED_BYTE, lut);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  const makeSampler = (filter) => {
+    const s = gl.createSampler();
+    gl.samplerParameteri(s, gl.TEXTURE_MIN_FILTER, filter);
+    gl.samplerParameteri(s, gl.TEXTURE_MAG_FILTER, filter);
+    for (const w of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T, gl.TEXTURE_WRAP_R]) gl.samplerParameteri(s, w, gl.CLAMP_TO_EDGE);
+    return s;
+  };
+  nearest = makeSampler(gl.NEAREST);
+  linear = makeSampler(gl.LINEAR);
+}
+
+// ---------- State ----------
+let layers = [];          // bottom to top
+let selected = null;
+let mode3d = false;
+let axis = 0;
+let slice = 0;
+let view2d = { cx: 0, cy: 0, scale: 1 };
+let cam = { fwd: [0, 0, 1], up: [0, -1, 0], right: [1, 0, 0], dist: 2.8 };
+
+const ref = () => layers[0];
+const planeSize = () => {
+  const r = ref();
+  return axis === 0 ? [r.w, r.h] : axis === 1 ? [r.w, r.d] : [r.h, r.d];
+};
+const sliceCount = () => {
+  const r = ref();
+  return axis === 0 ? r.d : axis === 1 ? r.h : r.w;
+};
+
+// ---------- Loading TIFFs ----------
+async function loadTiff(file) {
+  const tiff = await GeoTIFF.fromBlob(file);
+  const n = await tiff.getImageCount();
+  const first = await tiff.getImage(0);
+  const w0 = first.getWidth(), h0 = first.getHeight();
+  const f = Math.max(1, Math.ceil(Math.max(w0, h0, n) / MAX_DIM));
+  const w = Math.ceil(w0 / f), h = Math.ceil(h0 / f), d = Math.ceil(n / f);
+
+  const slices = [];
+  let dmin = Infinity, dmax = -Infinity;
+  for (let z = 0; z < d; z++) {
+    if (z % 10 === 0) {
+      setStatus(`Reading ${file.name}: slice ${z + 1} of ${d}`);
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    const img = await tiff.getImage(z * f);
+    const [band] = await img.readRasters({ samples: [0], width: w, height: h, resampleMethod: "nearest" });
+    for (let i = 0; i < band.length; i++) {
+      const v = band[i];
+      if (v < dmin) dmin = v;
+      if (v > dmax) dmax = v;
+    }
+    slices.push(band);
+  }
+  if (dmax === dmin) dmax = dmin + 1;
+
+  // Histogram for initial contrast (0.1 to 99.9 percentile)
+  const bins = new Float64Array(1024);
+  const scale = 1023 / (dmax - dmin);
+  for (const s of slices) for (let i = 0; i < s.length; i++) bins[Math.floor((s[i] - dmin) * scale)]++;
+  const total = w * h * d;
+  const pct = (p) => {
+    let c = 0;
+    for (let b = 0; b < 1024; b++) { c += bins[b]; if (c >= p * total) return dmin + b / scale; }
+    return dmax;
+  };
+  let lo = pct(0.001), hi = pct(0.999);
+  if (hi <= lo) { lo = dmin; hi = dmax; }
+
+  // Upload as a normalised half-float 3D texture
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_3D, tex);
+  gl.texStorage3D(gl.TEXTURE_3D, 1, gl.R16F, w, h, d);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  const buf = new Float32Array(w * h);
+  const inv = 1 / (dmax - dmin);
+  slices.forEach((s, z) => {
+    for (let i = 0; i < s.length; i++) buf[i] = (s[i] - dmin) * inv;
+    gl.texSubImage3D(gl.TEXTURE_3D, 0, 0, 0, z, w, h, 1, gl.RED, gl.FLOAT, buf);
+  });
+
+  const i = layers.length;
+  return {
+    name: file.name, tex, w, h, d, dmin, dmax,
+    dtype: slices[0].constructor.name.replace("Array", ""),
+    downsample: f, pages: n, w0, h0,
+    clim: [lo, hi],
+    cmap: DEFAULT_CMAPS[i % DEFAULT_CMAPS.length],
+    opacity: 1,
+    blending: i === 0 ? "translucent" : "additive",
+    rendering: "mip",
+    visible: true,
+  };
+}
+
+$("file").addEventListener("change", async (e) => {
+  const files = [...e.target.files];
+  e.target.value = "";
+  for (const file of files) {
+    try {
+      const layer = await loadTiff(file);
+      const firstLayer = layers.length === 0;
+      layers.push(layer);
+      selected = layer;
+      if (firstLayer) { slice = Math.floor(sliceCount() / 2); resetView(); }
+      refreshUI();
+      const size = `${layer.w} × ${layer.h} × ${layer.d}`;
+      const note = layer.downsample > 1
+        ? ` Downsampled ${layer.downsample}× from ${layer.w0} × ${layer.h0} × ${layer.pages} to fit the browser.`
+        : "";
+      setStatus(`Loaded ${layer.name}: ${size}, ${layer.dtype}.${note}`);
+    } catch (err) {
+      setStatus(`Could not read ${file.name}. ${err.message || err}`);
+    }
+  }
+});
+
+// ---------- UI ----------
+function formatValue(v, layer) {
+  const range = layer.dmax - layer.dmin;
+  return Number.isInteger(layer.dmin) && range > 50 ? Math.round(v).toString() : v.toPrecision(4);
+}
+
+function swatchGradient(name) {
+  return `linear-gradient(to right, ${COLORMAPS[name].join(", ")})`;
+}
+
+function refreshUI() {
+  $("hint").hidden = layers.length > 0;
+  const box = $("layers");
+  box.innerHTML = "";
+  if (!layers.length) {
+    box.innerHTML = '<p class="empty">No layers yet.</p>';
+  }
+  for (const layer of [...layers].reverse()) {
+    const row = document.createElement("div");
+    row.className = "layer-row" + (layer === selected ? " selected" : "");
+    const eye = document.createElement("input");
+    eye.type = "checkbox";
+    eye.checked = layer.visible;
+    eye.setAttribute("aria-label", "Show " + layer.name);
+    eye.addEventListener("change", () => { layer.visible = eye.checked; requestRender(); });
+    const sw = document.createElement("span");
+    sw.className = "swatch";
+    sw.style.background = swatchGradient(layer.cmap);
+    const name = document.createElement("span");
+    name.className = "layer-name";
+    name.textContent = layer.name;
+    name.title = layer.name;
+    const del = document.createElement("button");
+    del.textContent = "×";
+    del.setAttribute("aria-label", "Remove " + layer.name);
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      gl.deleteTexture(layer.tex);
+      layers = layers.filter((l) => l !== layer);
+      if (selected === layer) selected = layers[layers.length - 1] || null;
+      if (layers.length) { slice = Math.min(slice, sliceCount() - 1); }
+      refreshUI();
+    });
+    row.addEventListener("click", (e) => {
+      if (e.target === eye) return;
+      selected = layer;
+      refreshUI();
+    });
+    row.append(eye, sw, name, del);
+    box.append(row);
+  }
+
+  $("layerControls").hidden = !selected;
+  if (selected) {
+    const L = selected;
+    $("cmap").value = L.cmap;
+    for (const id of ["climLo", "climHi"]) {
+      $(id).min = L.dmin;
+      $(id).max = L.dmax;
+      $(id).step = (L.dmax - L.dmin) / 1000;
+    }
+    $("climLo").value = L.clim[0];
+    $("climHi").value = L.clim[1];
+    $("loVal").textContent = formatValue(L.clim[0], L);
+    $("hiVal").textContent = formatValue(L.clim[1], L);
+    $("opacity").value = Math.round(L.opacity * 100);
+    $("blending").value = L.blending;
+    $("rendering").value = L.rendering;
+  }
+
+  $("sliceControls").hidden = mode3d;
+  $("mode2d").setAttribute("aria-pressed", String(!mode3d));
+  $("mode3d").setAttribute("aria-pressed", String(mode3d));
+  if (layers.length) {
+    $("slice").max = sliceCount() - 1;
+    $("slice").value = slice;
+    $("sliceLabel").textContent = `Slice ${slice + 1} of ${sliceCount()}`;
+  } else {
+    $("sliceLabel").textContent = "Slice";
+  }
+  requestRender();
+}
+
+$("cmap").innerHTML = CMAP_NAMES.map((n) => `<option>${n}</option>`).join("");
+$("cmap").addEventListener("change", (e) => { selected.cmap = e.target.value; refreshUI(); });
+$("climLo").addEventListener("input", (e) => {
+  selected.clim[0] = Math.min(Number(e.target.value), selected.clim[1]);
+  refreshUI();
+});
+$("climHi").addEventListener("input", (e) => {
+  selected.clim[1] = Math.max(Number(e.target.value), selected.clim[0]);
+  refreshUI();
+});
+$("opacity").addEventListener("input", (e) => { selected.opacity = e.target.value / 100; requestRender(); });
+$("blending").addEventListener("change", (e) => { selected.blending = e.target.value; requestRender(); });
+$("rendering").addEventListener("change", (e) => { selected.rendering = e.target.value; requestRender(); });
+
+$("mode2d").addEventListener("click", () => { mode3d = false; refreshUI(); });
+$("mode3d").addEventListener("click", () => { mode3d = true; refreshUI(); });
+$("axis").addEventListener("change", (e) => {
+  axis = Number(e.target.value);
+  if (layers.length) { slice = Math.floor(sliceCount() / 2); resetView2d(); }
+  refreshUI();
+});
+$("slice").addEventListener("input", (e) => { slice = Number(e.target.value); refreshUI(); });
+$("resetView").addEventListener("click", () => { resetView(); requestRender(); });
+
+// ---------- Camera ----------
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const scl = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const normalize = (a) => scl(a, 1 / Math.hypot(...a));
+function rotate(v, k, ang) {
+  const c = Math.cos(ang), s = Math.sin(ang);
+  const kxv = cross(k, v), kdv = dot(k, v);
+  return [0, 1, 2].map((i) => v[i] * c + kxv[i] * s + k[i] * kdv * (1 - c));
+}
+
+function resetView2d() {
+  if (!layers.length) return;
+  const [pw, ph] = planeSize();
+  view2d = { cx: pw / 2, cy: ph / 2, scale: 0.95 * Math.min(canvas.width / pw, canvas.height / ph) };
+}
+function resetView() {
+  resetView2d();
+  cam = { fwd: [0, 0, 1], up: [0, -1, 0], right: [1, 0, 0], dist: 2.8 };
+}
+
+let drag = null;
+canvas.addEventListener("pointerdown", (e) => {
+  drag = { x: e.clientX, y: e.clientY };
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  drag = { x: e.clientX, y: e.clientY };
+  if (mode3d) {
+    let { fwd, up } = cam;
+    fwd = rotate(fwd, up, -dx * 0.008);
+    const right = normalize(cross(fwd, up));
+    fwd = rotate(fwd, right, -dy * 0.008);
+    up = rotate(up, right, -dy * 0.008);
+    cam.fwd = normalize(fwd);
+    cam.right = normalize(cross(cam.fwd, up));
+    cam.up = normalize(cross(cam.right, cam.fwd));
+  } else {
+    const dpr = window.devicePixelRatio || 1;
+    view2d.cx -= (dx * dpr) / view2d.scale;
+    view2d.cy -= (dy * dpr) / view2d.scale;
+  }
+  requestRender();
+});
+const endDrag = () => { drag = null; };
+canvas.addEventListener("pointerup", endDrag);
+canvas.addEventListener("pointercancel", endDrag);
+
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  if (mode3d) {
+    cam.dist = Math.min(20, Math.max(0.3, cam.dist * Math.exp(e.deltaY * 0.001)));
+  } else {
+    const dpr = window.devicePixelRatio || 1;
+    const r = canvas.getBoundingClientRect();
+    const fx = (e.clientX - r.left) * dpr, fy = (e.clientY - r.top) * dpr;
+    const toPlane = () => [
+      (fx - canvas.width / 2) / view2d.scale + view2d.cx,
+      (fy - canvas.height / 2) / view2d.scale + view2d.cy,
+    ];
+    const before = toPlane();
+    view2d.scale *= Math.exp(-e.deltaY * 0.0015);
+    const after = toPlane();
+    view2d.cx += before[0] - after[0];
+    view2d.cy += before[1] - after[1];
+  }
+  requestRender();
+}, { passive: false });
+
+// ---------- Rendering ----------
+let pending = false;
+function requestRender() {
+  if (pending) return;
+  pending = true;
+  requestAnimationFrame(() => { pending = false; render(); });
+}
+
+function render() {
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clearColor(0, 0, 0, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  if (!layers.length) return;
+
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  const P = mode3d ? prog3d : prog2d;
+  gl.useProgram(P.p);
+  gl.uniform1i(P.u("uVol"), 0);
+  gl.uniform1i(P.u("uCmap"), 1);
+  gl.uniform2f(P.u("uCanvas"), canvas.width, canvas.height);
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, cmapTex);
+  gl.bindSampler(0, mode3d ? linear : nearest);
+
+  if (mode3d) {
+    const r = ref();
+    const m = Math.max(r.w, r.h, r.d);
+    gl.uniform3f(P.u("uBox"), r.w / m, r.h / m, r.d / m);
+    gl.uniform3fv(P.u("uEye"), scl(cam.fwd, -cam.dist));
+    gl.uniform3fv(P.u("uFwd"), cam.fwd);
+    gl.uniform3fv(P.u("uUp"), cam.up);
+    gl.uniform3fv(P.u("uRight"), cam.right);
+    gl.uniform1f(P.u("uTanHalf"), Math.tan((30 * Math.PI) / 360));
+    gl.uniform1f(P.u("uStep"), 0.5 / m);
+  } else {
+    const [pw, ph] = planeSize();
+    gl.uniform2f(P.u("uPlane"), pw, ph);
+    gl.uniform3f(P.u("uView"), view2d.cx, view2d.cy, view2d.scale);
+    gl.uniform1i(P.u("uAxis"), axis);
+    gl.uniform1f(P.u("uSlice"), (slice + 0.5) / sliceCount());
+  }
+
+  for (const L of layers) {
+    if (!L.visible) continue;
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_3D, L.tex);
+    const range = L.dmax - L.dmin;
+    gl.uniform2f(P.u("uClim"), (L.clim[0] - L.dmin) / range, (L.clim[1] - L.dmin) / range);
+    gl.uniform1f(P.u("uRow"), (CMAP_NAMES.indexOf(L.cmap) + 0.5) / CMAP_NAMES.length);
+    gl.uniform1f(P.u("uOpacity"), L.opacity);
+    gl.uniform1f(P.u("uAdditive"), L.blending === "additive" ? 1 : 0);
+    gl.uniform1i(P.u("uMode"), L.rendering === "mip" ? 0 : 1);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+}
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
+  if (w === canvas.width && h === canvas.height) return;
+  const first = canvas.width === 300 && canvas.height === 150;
+  canvas.width = w;
+  canvas.height = h;
+  if (first) resetView2d();
+  requestRender();
+}
+
+// ---------- Start ----------
+if (!gl) {
+  setStatus("This browser does not support WebGL2, which the viewer needs. Try a recent Chrome, Firefox or Safari.");
+} else if (typeof GeoTIFF === "undefined") {
+  setStatus("The TIFF reader failed to load. Check your internet connection and reload the page.");
+} else {
+  initGL();
+  new ResizeObserver(resize).observe(canvas);
+  resize();
+  refreshUI();
+  setStatus("Open one or more 3D TIFF files.");
+}
+</script>
+</body>
+</html>
